@@ -1,0 +1,126 @@
+# OpenReply — production stack for Coolify (Docker Compose deployment)
+#
+# Five services from one repo:
+#   web      — Next.js: dashboard + OAuth callback + Meta webhook (the only public one)
+#   worker   — long-running BullMQ consumer, actually sends the DMs
+#   cron     — scripts/cron.sh, replaces the vercel.json "crons" block
+#   postgres — data
+#   redis    — BullMQ queue + per-account rate limiter
+#
+# Coolify notes:
+#   - no host `ports:` anywhere — Traefik routes to `web` via the domain set in the UI
+#   - migrations run in web's START command, never at build time (no DB on the build network)
+#   - web's healthcheck hits /login, NOT /api/health: /api/health returns 503 until the
+#     worker heartbeat exists, which would deadlock `cron: depends_on: web: service_healthy`
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openreply
+      POSTGRES_USER: openreply
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openreply -d openreply"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # prisma migrate deploy at START, not at build — see Gotcha #3 in docs/deploy-dokploy.md
+    command: ["sh", "-c", "npx prisma migrate deploy && npm run start"]
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://openreply:${POSTGRES_PASSWORD}@postgres:5432/openreply
+      REDIS_URL: redis://redis:6379
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      AUTH_TRUST_HOST: "true"
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      CRON_SECRET: ${CRON_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      EMAIL_FROM: ${EMAIL_FROM}
+      # Magic-link transport. EMAIL_SERVER (SMTP) wins when set; otherwise
+      # Resend is used. Leave the unused one empty in Coolify, not unset.
+      EMAIL_SERVER: ${EMAIL_SERVER}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS}
+      META_GRAPH_API_VERSION: ${META_GRAPH_API_VERSION}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET}
+      WEBHOOK_VERIFY_TOKEN: ${WEBHOOK_VERIFY_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/login || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["npm", "run", "worker"]
+    environment:
+      NODE_ENV: production
+      # DATABASE_URL, REDIS_URL and ENCRYPTION_KEY must match `web` exactly:
+      # web encrypts the Instagram token, the worker decrypts it to send.
+      DATABASE_URL: postgresql://openreply:${POSTGRES_PASSWORD}@postgres:5432/openreply
+      REDIS_URL: redis://redis:6379
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      META_GRAPH_API_VERSION: ${META_GRAPH_API_VERSION}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+
+  cron:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["sh", "scripts/cron.sh"]
+    environment:
+      CRON_BASE_URL: http://web:3000
+      CRON_SECRET: ${CRON_SECRET}
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
