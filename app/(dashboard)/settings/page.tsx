@@ -101,6 +101,11 @@ export default function SettingsPage() {
     if (payload.success) {
       setMembersData(payload.data);
       setInviteEmail("");
+      if (payload.emailSent === false) {
+        setMemberError(
+          "Invitation created, but the email could not be sent. Copy the link from Pending invites."
+        );
+      }
     } else {
       setMemberError(payload.error ?? "Could not invite member");
     }

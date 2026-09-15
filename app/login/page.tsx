@@ -1,3 +1,5 @@
+import { AuthError } from "next-auth";
+import { redirect } from "next/navigation";
 import { EMAIL_PROVIDER_ID, signIn } from "@/lib/auth";
 import { getCampaignTemplate } from "@/lib/templates/campaign-templates";
 import { DemoNotice } from "@/components/demo-notice";
@@ -14,10 +16,17 @@ export default async function LoginPage({
     checkEmail?: string;
     callbackUrl?: string;
     template?: string;
+    error?: string;
   }>;
 }) {
   const params = await searchParams;
   const checkEmail = params.checkEmail === "1";
+  const signInError =
+    params.error === "AccessDenied"
+      ? "This email is not allowed to sign in. Ask the workspace owner to invite it."
+      : params.error
+        ? "We could not send the sign-in link. Try again in a minute."
+        : null;
   const selectedTemplate = getCampaignTemplate(params.template);
   const templateCallbackUrl = selectedTemplate
     ? `/campaigns/new?template=${selectedTemplate.slug}`
@@ -26,10 +35,24 @@ export default async function LoginPage({
 
   async function sendMagicLink(formData: FormData) {
     "use server";
-    await signIn(EMAIL_PROVIDER_ID, {
-      email: String(formData.get("email") ?? ""),
-      redirectTo: callbackUrl,
-    });
+    let errorType: string;
+    try {
+      await signIn(EMAIL_PROVIDER_ID, {
+        email: String(formData.get("email") ?? ""),
+        redirectTo: callbackUrl,
+      });
+      return;
+    } catch (error) {
+      // A refused address or a failed send surfaces as an AuthError. Anything
+      // else, including the redirect signIn throws on success, propagates.
+      if (!(error instanceof AuthError)) throw error;
+      errorType = error.type;
+    }
+    // redirect throws, so it stays outside the try block.
+    const retry = new URLSearchParams({ error: errorType });
+    if (params.callbackUrl) retry.set("callbackUrl", params.callbackUrl);
+    if (params.template) retry.set("template", params.template);
+    redirect(`/login?${retry.toString()}`);
   }
 
   return (
@@ -70,6 +93,11 @@ export default async function LoginPage({
             </div>
           ) : (
             <form action={sendMagicLink} className="space-y-5">
+              {signInError && (
+                <p className="border border-error/30 bg-error/10 p-3 text-sm text-error">
+                  {signInError}
+                </p>
+              )}
               <div className="space-y-2">
                 <label
                   htmlFor="email"

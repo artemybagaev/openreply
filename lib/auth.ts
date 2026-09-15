@@ -3,12 +3,16 @@ import Nodemailer from "next-auth/providers/nodemailer";
 import Resend from "next-auth/providers/resend";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/lib/db/client";
-import { ensureWorkspaceForUser, getPrimaryWorkspace } from "@/lib/workspace";
+import {
+  ensureWorkspaceForUser,
+  getPrimaryWorkspace,
+  isInvitedToWorkspace,
+} from "@/lib/workspace";
 import { isEmailAllowedToSignIn } from "@/lib/env";
+import { emailFrom } from "@/lib/email";
 
 type AdapterPrismaClient = Parameters<typeof PrismaAdapter>[0];
 
-const emailFrom = process.env.EMAIL_FROM ?? "OpenReply <login@example.com>";
 // Setting EMAIL_SERVER switches magic links to your own SMTP server, for
 // self-hosters who do not want a third-party mail service. Resend stays the
 // default, so an existing deployment is unaffected.
@@ -32,9 +36,11 @@ export const authConfig = {
   ],
   callbacks: {
     // Runs before the magic link is sent, so a blocked address never receives
-    // one, and again when the link is verified.
+    // one, and again when the link is verified. Invited teammates pass even
+    // when they are not on ALLOWED_EMAILS.
     async signIn({ user }) {
-      return isEmailAllowedToSignIn(user?.email);
+      if (isEmailAllowedToSignIn(user?.email)) return true;
+      return isInvitedToWorkspace(user?.email);
     },
     async session({ session, user }) {
       if (session.user) {

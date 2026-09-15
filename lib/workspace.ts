@@ -50,6 +50,39 @@ export async function acceptPendingInvitationsForUser(
   }
 }
 
+/**
+ * Whether a workspace owner or admin has brought this address in: it holds a
+ * live invitation, or it already joined a workspace as admin or member. The
+ * sign-in allowlist lets these through, so inviting a teammate does not also
+ * mean editing ALLOWED_EMAILS. Removing the member takes the access away again.
+ */
+export async function isInvitedToWorkspace(
+  email: string | null | undefined
+): Promise<boolean> {
+  if (!email) return false;
+
+  const normalizedEmail = normalizeInviteEmail(email);
+  const [invitation, membership] = await Promise.all([
+    prisma.workspaceInvitation.findFirst({
+      where: {
+        email: normalizedEmail,
+        status: "PENDING",
+        expiresAt: { gt: new Date() },
+      },
+      select: { id: true },
+    }),
+    prisma.workspaceMember.findFirst({
+      where: {
+        role: { in: ["ADMIN", "MEMBER"] },
+        user: { email: normalizedEmail },
+      },
+      select: { id: true },
+    }),
+  ]);
+
+  return Boolean(invitation || membership);
+}
+
 export async function getWorkspaceMembership(userId: string): Promise<{
   workspace: Workspace;
   role: WorkspaceRole;

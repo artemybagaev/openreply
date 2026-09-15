@@ -7,6 +7,7 @@ import {
   getInvitationExpiry,
   normalizeInvitationEmail,
 } from "@/lib/workspace-invitations";
+import { sendInvitationEmail } from "@/lib/invitation-email";
 import {
   canManageWorkspace,
   getCurrentWorkspaceContext,
@@ -119,6 +120,9 @@ export async function POST(request: NextRequest) {
     select: { id: true },
   });
 
+  // Only a new invitation needs an email; an existing user joins right away.
+  let emailSent: boolean | undefined;
+
   if (existingUser) {
     await prisma.workspaceMember.upsert({
       where: {
@@ -137,7 +141,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } else {
-    await prisma.workspaceInvitation.upsert({
+    const invitation = await prisma.workspaceInvitation.upsert({
       where: {
         workspaceId_email: {
           workspaceId: context.workspaceId,
@@ -160,10 +164,25 @@ export async function POST(request: NextRequest) {
         expiresAt: getInvitationExpiry(),
       },
     });
+
+    try {
+      await sendInvitationEmail({
+        to: email,
+        workspaceName: context.workspace.name,
+        role: parsed.data.role,
+        inviteUrl: buildInvitationUrl(invitation.token),
+      });
+      emailSent = true;
+    } catch (error) {
+      // The invitation stays valid; the owner can still copy its link.
+      console.error("[Invite] Failed to send invitation email", error);
+      emailSent = false;
+    }
   }
 
   return NextResponse.json({
     success: true,
+    ...(emailSent === undefined ? {} : { emailSent }),
     data: await getMemberPayload(context.workspaceId, context.role),
   });
 }

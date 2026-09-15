@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { AuthError } from "next-auth";
 import InvitationAcceptCard from "@/components/invitation-accept-card";
-import { auth } from "@/lib/auth";
+import { auth, EMAIL_PROVIDER_ID, signIn } from "@/lib/auth";
 import { prisma } from "@/lib/db/client";
+import { normalizeInvitationEmail } from "@/lib/workspace-invitations";
 
 type InvitePageProps = {
   params: Promise<{ token: string }>;
@@ -26,11 +28,38 @@ export default async function InvitePage({ params }: InvitePageProps) {
     }),
   ]);
 
+  // A new account accepts its invitations while it is created, so the magic
+  // link lands back here with the invitation already accepted.
+  if (
+    invitation?.status === "ACCEPTED" &&
+    session?.user?.email &&
+    normalizeInvitationEmail(session.user.email) === invitation.email
+  ) {
+    redirect("/dashboard");
+  }
+
   if (!invitation || invitation.status !== "PENDING") {
     notFound();
   }
 
   const expired = invitation.expiresAt <= new Date();
+  const invitedEmail = invitation.email;
+
+  async function sendSignInLink() {
+    "use server";
+    let errorType: string;
+    try {
+      await signIn(EMAIL_PROVIDER_ID, {
+        email: invitedEmail,
+        redirectTo: `/invite/${token}`,
+      });
+      return;
+    } catch (error) {
+      if (!(error instanceof AuthError)) throw error;
+      errorType = error.type;
+    }
+    redirect(`/login?error=${encodeURIComponent(errorType)}`);
+  }
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -58,7 +87,8 @@ export default async function InvitePage({ params }: InvitePageProps) {
               <InvitationAcceptCard
                 token={token}
                 isSignedIn={Boolean(session?.user?.id)}
-                invitedEmail={invitation.email}
+                invitedEmail={invitedEmail}
+                sendSignInLink={sendSignInLink}
               />
             )}
           </div>

@@ -6,12 +6,14 @@ interface InvitationAcceptCardProps {
   token: string;
   isSignedIn: boolean;
   invitedEmail: string;
+  sendSignInLink: () => Promise<void>;
 }
 
 export default function InvitationAcceptCard({
   token,
   isSignedIn,
   invitedEmail,
+  sendSignInLink,
 }: InvitationAcceptCardProps) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -35,12 +37,17 @@ export default function InvitationAcceptCard({
 
   if (!isSignedIn) {
     return (
-      <a
-        href="/login"
-        className="inline-flex items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-white transition hover:bg-accent-hover"
-      >
-        Sign in to accept
-      </a>
+      <form action={sendSignInLink} className="space-y-3">
+        <button
+          type="submit"
+          className="inline-flex items-center justify-center rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-white transition hover:bg-accent-hover"
+        >
+          Email me a sign-in link
+        </button>
+        <p className="text-xs text-muted">
+          We will send it to {invitedEmail}.
+        </p>
+      </form>
     );
   }
 
